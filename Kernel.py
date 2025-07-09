@@ -311,7 +311,7 @@ class Kernel:
     # Agents will request the Kernel to serialize their agent logs, usually
     # during kernelTerminating, but the Kernel must write out the summary
     # log itself.
-    self.writeSummaryLog()
+    # self.writeSummaryLog()
 
     # This should perhaps be elsewhere, as it is explicitly financial, but it
     # is convenient to have a quick summary of the results for now.

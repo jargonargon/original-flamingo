@@ -5,9 +5,9 @@ import pandas as pd
 import math
 
 # System parameters
-vector_len = 16000
+vector_len = int(25.557 * (10**6))
 vector_type = 'uint32'
-committee_size = 60
+committee_size = 30
 fraction = 1/3
 fixed_key = b"abcd"
 
@@ -15,8 +15,8 @@ fixed_key = b"abcd"
 # Set according to a target dropout rate (e.g., 1%) 
 # and message lantecy (see model/LatencyModel.py)
 wt_flamingo_report = pd.Timedelta('10s')
-wt_flamingo_crosscheck = pd.Timedelta('3s')
-wt_flamingo_reconstruction = pd.Timedelta('3s')
+wt_flamingo_crosscheck = pd.Timedelta('5s')
+wt_flamingo_reconstruction = pd.Timedelta('5s')
 
 wt_google_adkey = pd.Timedelta('10s')
 wt_google_graph = pd.Timedelta('10s')

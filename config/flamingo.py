@@ -123,10 +123,10 @@ defaultComputationDelay = 1000000000 * 0.1  # ns
 
 
 ### Configure the Kernel.
-kernel = Kernel("Base Kernel", random_state = np.random.RandomState(seed=np.random.randint(low=0,high=2**32, dtype='uint64')))
+kernel = Kernel("Base Kernel", random_state = np.random.RandomState(seed=seed))
 
 ### Obtain random state for whatever latency model will be used.
-latency_rstate = np.random.RandomState(seed=np.random.randint(low=0,high=2**32, dtype='uint64'))
+latency_rstate = np.random.RandomState(seed=seed)
 
 ### Configure the agents.  When conducting "agent of change" experiments, the
 ### new agents should be added at the END only.
@@ -186,7 +186,7 @@ for i in range (a, b):
                 # multiplier = accy_multiplier, X_train = X_train, y_train = y_train, X_test = X_test, y_test = y_test,
                 # split_size = split_size, secret_scale = secret_scale,
                 debug_mode = debug_mode,
-                random_state = np.random.RandomState(seed=np.random.randint(low=0,high=2**32,  dtype='uint64'))))
+                random_state = np.random.RandomState(seed=seed)))
 
 agent_types.extend([ "ClientAgent" for i in range(a,b) ])
 
@@ -203,7 +203,7 @@ agents.extend([ ServiceAgent(
                 id = b,   # set id to be a number after all clients
                 name = "PPFL Service Agent",
                 type = "ServiceAgent",
-                random_state = np.random.RandomState(seed=np.random.randint(low=0,high=2**32, dtype='uint64')),
+                random_state = np.random.RandomState(seed=seed),
                 msg_fwd_delay=0,
                 users = [*range(a, b)],
                 iterations = num_iterations,
@@ -221,7 +221,6 @@ agent_types.extend(["ServiceAgent"])
 
 # Get a new-style cubic LatencyModel from the networking literature.
 pairwise = (len(agent_types),len(agent_types))
-
 model_args = { 'connected'   : True,
 
                # All in NYC.
@@ -233,9 +232,30 @@ model_args = { 'connected'   : True,
                'jitter_unit' : 5,
              }
 
-latency_model = LatencyModel ( latency_model = 'cubic',
+model_args_de = { 'connected'   : True,
+
+               # All in NYC.
+               # Only matters for evaluating "real world" protocol duration,
+               # not for accuracy, collusion, or reconstruction.
+               'min_latency' : np.random.choice([3000, 12000000000], size=pairwise, p=[0.95, 0.05]),
+               'jitter'      : 0.3,
+               'jitter_clip' : 0.05,
+               'jitter_unit' : 5,
+             }
+
+"""
+- seed = 2,
+- wt_flamingo_report = pd.Timedelta('10s')
+- wt_flamingo_crosscheck = pd.Timedelta('5s')
+- wt_flamingo_reconstruction = pd.Timedelta('5s')
+- wt_flamingo_reqExtraDec = pd.Timedelta('50s')
+  - clients: 256, decryptor: 30, 
+    - online clients: 245, online decryptor: 28
+"""
+
+latency_model = LatencyModel ( latency_model = 'deterministic',
                               random_state = latency_rstate,
-                              kwargs = model_args )
+                              kwargs = model_args_de )
 
 
 # Start the kernel running.
@@ -250,19 +270,41 @@ results = kernel.runner(agents = agents,
 
 
 # Print parameter summary and elapsed times by category for this experimental trial.
-print ()
-print (f"######## Microbenchmarks ########")
-print (f"Protocol Iterations: {num_iterations}, Clients: {num_clients}, ")
+print()
+print("########## Microbenchmarks Summary ##########")
+print(f"  Protocol Iterations  : {num_iterations}")
+print(f"  Number of Clients    : {num_clients}")
+print(f"  Number of Decryptors : {param.committee_size}")
+print("############ Experiment Setups ############")
+print(f"  Vector length (Enc) : {param.vector_len:,}")
+print(f"  Vector type.        : {param.vector_type}")
 
-print ()
-print ("Service Agent mean time per iteration (except setup)...")
-print (f"    Report step:         {results['srv_report']}")
-print (f"    Crosscheck step:     {results['srv_crosscheck']}")
-print (f"    Reconstruction step: {results['srv_reconstruction']}")
-print ()
-print ("Client Agent mean time per iteration (except setup)...")
-print (f"    Report step:         {results['clt_report'] / num_clients}")
-print (f"    Crosscheck step:     {results['clt_crosscheck'] / param.committee_size}")
-print (f"    Reconstruction step: {results['clt_reconstruction'] / param.committee_size}")
-print ()
+print()
+print("----- Service Agent (Mean Time per Iteration) -----")
+print(f"  - Report Step        : {results['srv_report']}")
+print(f"  - Crosscheck Step    : {results['srv_crosscheck']}")
+print(f"  - Reconstruction Step: {results['srv_reconstruction']}")
+print(f"Total Time: {results['srv_report']+results['srv_crosscheck']+results['srv_reconstruction']}")
 
+print()
+print("----- Client Agent (Mean Time per Iteration) -----")
+print(f"  - Report Step        : {results['clt_report'] / num_clients}")
+print(f"  - Crosscheck Step    : {results['clt_crosscheck'] / param.committee_size}")
+print(f"  - Reconstruction Step: {results['clt_reconstruction'] / param.committee_size}")
+print(f"Total Time: {(results['clt_report']/num_clients) + (results['clt_crosscheck']/param.committee_size) + (results['clt_reconstruction']/param.committee_size)}")
+
+print()
+print("----- Server Agent Communication (Average per Iteration) -----")
+print(f"  - Received from Clients (Report Step)       : {round(results['srv_comm_report']):,} Bytes")
+print(f"  - Sent to Decryptors (Labels & Ciphertexts) : {round(results['srv_comm_label&cipher']):,} Bytes")
+print(f"  - Received from Decryptors (RECON 1)        : {round(results['srv_comm_recon1']):,} Bytes")
+print(f"Total Send    : {round(results['srv_comm_label&cipher']):,} Bytes.")
+print(f"Total Receive : {round(results['srv_comm_report']+results['srv_comm_recon1']):,} Bytes.")
+
+print()
+print("----- Client Agent Communication (Average per Client) -----")
+print(f"  - Receive from Server (Vector Download)     : {round((32/8)*param.vector_len):,} Bytes")
+print(f"  - Sent to Server (Report Step)              : {round(results['clt_comm_report'] / num_clients):,} Bytes")
+print("--- decryptor ---")
+print(f"  - Received from Server (Labels & Cipertexts): {round(results['dec_comm_label&cipher'] / param.committee_size):,} Bytes")
+print(f"  - Sent to Server (Recon1)                   : {round(results['dec_comm_recon1'] / param.committee_size):,} Bytes")

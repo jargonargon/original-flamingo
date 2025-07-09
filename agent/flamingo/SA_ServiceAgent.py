@@ -22,7 +22,7 @@ from util import param
 from util import util
 from util.crypto import ecchash
 from util.crypto.secretsharing import secret_int_to_points, points_to_secret_int
-
+from pympler import asizeof
 
 def parallel_mult(vec, coeff):
     """Scalar multiplication for EC points in parallel."""
@@ -91,6 +91,12 @@ class SA_ServiceAgent(Agent):
                              'RECONSTRUCTION': pd.Timedelta(0),
                              }
         
+        # agent accumulation of communication size
+        self.message_size = {'REPORT' : 0,
+                             'LABEL&CIPHERTEXT': 0,
+                             'RECONSTRUCTION': 0,
+                             }
+        
         # Initialize pools.
         self.user_vectors = {}
         self.pairwise_cipher = {}
@@ -143,6 +149,15 @@ class SA_ServiceAgent(Agent):
         self.kernel.custom_state['srv_crosscheck'] = pd.Timedelta(0)
         self.kernel.custom_state['srv_reconstruction'] = pd.Timedelta(0)
 
+        ## Send communication size
+        self.kernel.custom_state['srv_comm_ciphertext'] = 0
+        self.kernel.custom_state['srv_comm_label&cipher'] = 0
+
+        ## Receive communication size
+        self.kernel.custom_state['srv_comm_report'] = 0
+        self.kernel.custom_state['srv_comm_recon1'] = 0
+
+
         # This agent should have negligible (or no) computation delay until otherwise specified.
         self.setComputationDelay(0)
 
@@ -158,6 +173,11 @@ class SA_ServiceAgent(Agent):
             self.elapsed_time['CROSSCHECK'] / self.no_of_iterations)
         self.kernel.custom_state['srv_reconstruction'] += (
             self.elapsed_time['RECONSTRUCTION'] / self.no_of_iterations)
+        
+        self.kernel.custom_state['srv_comm_report'] += self.message_size['REPORT'] / self.no_of_iterations
+        self.kernel.custom_state['srv_comm_label&cipher'] += self.message_size['LABEL&CIPHERTEXT'] / self.no_of_iterations
+        self.kernel.custom_state['srv_comm_recon1'] += self.message_size['RECONSTRUCTION'] / self.no_of_iterations
+        
 
         # Allow the base class to perform stopping activities.
         super().kernelStopping()
@@ -204,6 +224,9 @@ class SA_ServiceAgent(Agent):
         # Collect masked vectors from clients
         if msg.body['msg'] == "VECTOR":
 
+            ## record receive communication size.
+            self.recordBandwidth(msg, 'REPORT')
+
             if msg.body['iteration'] == self.current_iteration:
                 
                 # Store the vectors
@@ -237,6 +260,7 @@ class SA_ServiceAgent(Agent):
         elif msg.body['msg'] == "SHARED_RESULT":
                     
             if msg.body['iteration'] == self.current_iteration:
+                self.recordBandwidth(msg, "RECONSTRUCTION")
                 
                 self.recv_committee_shares_pairwise[sender_id] = util.deserialize_dim1_ecp(msg.body['shared_result_pairwise'])
                 self.recv_committee_shares_mi[sender_id] = util.deserialize_dim1_list(msg.body['shared_result_mi'])
@@ -389,15 +413,17 @@ class SA_ServiceAgent(Agent):
         # Should send only the c1 component of the ciphertext to the committee
         cnt = 0
         for id in self.user_committee:
-            self.sendMessage(id,
-                             Message({"msg": "SIGN",
+            temp_Message = Message({"msg": "SIGN",
                                       "iteration": self.current_iteration,
                                       "dec_target_pairwise": util.serialize_dim1_elgamal(self.dec_target_pairwise),
                                       "dec_target_mi": util.serialize_tuples_bytes(self.df_mi_cipher[cnt]),
                                       "client_id_list": self.client_id_list,
                                       "labels": self.labels_and_sig,
-                                      }),
+                                      })
+            self.sendMessage(id,
+                             temp_Message,
                              tag="comm_dec_server")
+            self.recordBandwidth(temp_Message, 'LABEL&CIPHERTEXT')
             cnt += 1
 
     def forward_signatures(self, currentTime):
@@ -634,3 +660,6 @@ class SA_ServiceAgent(Agent):
             **kwargs: Any keyword arguments that the built-in print function accepts.
         """
         print(*args, **kwargs)
+
+    def recordBandwidth(self, msgobj, categoryName):
+        self.message_size[categoryName] += asizeof.asizeof(msgobj)

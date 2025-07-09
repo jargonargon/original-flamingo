@@ -25,6 +25,7 @@ from util import param
 from util import util
 from util.crypto import ecchash
 from util.crypto.secretsharing import secret_int_to_points, points_to_secret_int
+from pympler import asizeof
 
 # The PPFL_TemplateClientAgent class inherits from the base Agent class.
 class SA_ClientAgent(Agent):
@@ -96,6 +97,12 @@ class SA_ClientAgent(Agent):
                              'RECONSTRUCTION': pd.Timedelta(0),
                              }
 
+        # Accumulate this client's communication size by step.
+        self.message_size = { 'REPORT' : 0,
+                              'LABEL&CIPHERTEXT' : 0,
+                              'RECONSTRUCTION' : 0,
+                            }
+
         # Iteration counter
         self.no_of_iterations = iterations
         self.current_iteration = 1
@@ -114,6 +121,13 @@ class SA_ClientAgent(Agent):
             self.kernel.custom_state['clt_report'] = pd.Timedelta(0)
             self.kernel.custom_state['clt_crosscheck'] = pd.Timedelta(0)
             self.kernel.custom_state['clt_reconstruction'] = pd.Timedelta(0)
+
+            ## Send communication size
+            self.kernel.custom_state['clt_comm_report'] = 0
+            self.kernel.custom_state['dec_comm_recon1'] = 0
+
+            ## Receive communication size
+            self.kernel.custom_state['dec_comm_label&cipher'] = 0
 
         # Find the PPFL service agent, so messages can be directed there.
         self.serviceAgentID = self.kernel.findAgentByType(ServiceAgent)
@@ -138,6 +152,11 @@ class SA_ClientAgent(Agent):
         self.kernel.custom_state['clt_reconstruction'] += (
             self.elapsed_time['RECONSTRUCTION'] / self.no_of_iterations)
 
+        self.kernel.custom_state['clt_comm_report'] += self.message_size['REPORT'] / self.no_of_iterations
+        self.kernel.custom_state['dec_comm_label&cipher'] += self.message_size['LABEL&CIPHERTEXT'] / self.no_of_iterations
+        self.kernel.custom_state['dec_comm_recon1'] += self.message_size['RECONSTRUCTION'] / self.no_of_iterations
+
+
         super().kernelStopping()
 
     # Simulation participation messages.
@@ -145,6 +164,7 @@ class SA_ClientAgent(Agent):
         super().wakeup(currentTime)
         dt_wake_start = pd.Timestamp('now')
         self.sendVectors(currentTime)
+        self.recordTime(dt_wake_start, "REPORT")
 
     def receiveMessage(self, currentTime, msg):
         super().receiveMessage(currentTime, msg)
@@ -156,6 +176,7 @@ class SA_ClientAgent(Agent):
 
         elif msg.body['msg'] == "SIGN":
             if msg.body['iteration'] == self.current_iteration:
+                self.recordBandwidth(msg, 'LABEL&CIPHERTEXT')
                 dt_protocol_start = pd.Timestamp('now')
                 self.cipher_stored = msg
                 self.signSendLabels(currentTime, msg.body['labels'])
@@ -336,16 +357,19 @@ class SA_ClientAgent(Agent):
             self.logger.info(f"client {self.id} computation delay for vector: {client_comp_delay}")
             self.logger.info(f"client {self.id} sends vector at {currentTime + client_comp_delay}")
         
-        # Send the vector to the server
-        self.sendMessage(self.serviceAgentID,
-                         Message({"msg": "VECTOR",
+        temp_Message = Message({"msg": "VECTOR",
                                   "iteration": self.current_iteration,
                                   "sender": self.id,
                                   "vector": vec,
                                   "enc_mi_shares": util.serialize_tuples_bytes(enc_mi_shares),
                                   "enc_pairwise": util.serialize_dim1_elgamal(cipher_msg),
-                                  }),
+                                  })
+        
+        # Send the vector to the server
+        self.sendMessage(self.serviceAgentID,
+                         temp_Message,
                          tag="comm_key_generation")
+        self.recordBandwidth(temp_Message, 'REPORT')
 
   
     def signSendLabels(self, currentTime, msg_to_sign):
@@ -420,15 +444,17 @@ class SA_ClientAgent(Agent):
         if __debug__:
             self.logger.info(f"[Decryptor] run time for reconstruction step: {clt_comp_delay}")
         
-        self.sendMessage(self.serviceAgentID,
-                         Message({"msg": "SHARED_RESULT",
+        temp_Message =  Message({"msg": "SHARED_RESULT",
                                   "iteration": self.current_iteration,
                                   "sender": self.id,
                                   "shared_result_pairwise": util.serialize_dim1_ecp(dec_shares_pairwise),
                                   "shared_result_mi": util.serialize_dim1_list(dec_shares_mi),
                                   "committee_member_idx": self.committee_member_idx,
-                                  }),
+                                  })
+        self.sendMessage(self.serviceAgentID,
+                         temp_Message,
                          tag="comm_secret_sharing")
+        self.recordBandwidth(temp_Message, "RECONSTRUCTION")
 
 
     def elgamal_enc_group(self, system_pk, ptxt_point):
@@ -463,3 +489,6 @@ class SA_ClientAgent(Agent):
             **kwargs: Any keyword arguments that the built-in print function accepts.
         """
         print(*args, **kwargs)
+
+    def recordBandwidth(self, msgobj, categoryName):
+        self.message_size[categoryName] += asizeof.asizeof(msgobj)
